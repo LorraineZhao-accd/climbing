@@ -945,6 +945,7 @@ const PHASES = {
       S.wobble = 0; S.win = { t: 0, hop: 0 };
       $('climberG').style.opacity = 0; $('frontG').style.opacity = 1;
       $('stats').classList.add('away');
+      playCheer();
       later(700, launchConfetti);
       later(1600, () => $('again').classList.add('show'));
     },
@@ -975,6 +976,67 @@ const FSM = {
 /* =====================================================================
    CONFETTI — little hand-drawn holds
    ===================================================================== */
+/* =====================================================================
+   CHEER — a synthesised crowd cheer for the top-out (Web Audio, no files)
+   ===================================================================== */
+let audioCtx = null;
+// Browsers only allow sound after a user gesture: unlock the context on the first tap/click
+function unlockAudio() {
+  try {
+    if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    if (audioCtx.state === 'suspended') audioCtx.resume();
+  } catch (e) { audioCtx = null; }
+}
+function playCheer(ctx = audioCtx, t0 = ctx ? ctx.currentTime + 0.05 : 0) {
+  if (!ctx) return;
+  const R = rng(Date.now() % 100000 + 7), len = 4.2;
+  const out = ctx.createDynamicsCompressor(), master = ctx.createGain();
+  master.gain.value = 0.75; out.connect(master); master.connect(ctx.destination);
+  const noise = ctx.createBuffer(1, Math.floor(ctx.sampleRate * len), ctx.sampleRate), d = noise.getChannelData(0);
+  for (let i = 0; i < d.length; i++) d[i] = Math.random() * 2 - 1;
+  const env = (g, pts) => { g.gain.setValueAtTime(0, t0); for (const [t, v] of pts) g.gain.linearRampToValueAtTime(v, t0 + t); };
+
+  // crowd roar: noise through two "vowel" formants, swelling then fading
+  for (const [freq, q, lvl] of [[750, 1.2, .5], [1300, 1.4, .35], [2600, 2, .15]]) {
+    const src = ctx.createBufferSource(), bp = ctx.createBiquadFilter(), g = ctx.createGain();
+    src.buffer = noise; bp.type = 'bandpass'; bp.frequency.value = freq; bp.Q.value = q;
+    env(g, [[.25, lvl], [1.6, lvl * .85], [len - .2, 0]]);
+    src.connect(bp); bp.connect(g); g.connect(out); src.start(t0); src.stop(t0 + len);
+  }
+  // individual "yeah!" voices: buzzy tones gliding up through vowel formants, staggered
+  for (let i = 0; i < 9; i++) {
+    const at = t0 + .05 + R() * 1.4, dur = .45 + R() * .5, f0 = 180 + R() * 220;
+    const osc = ctx.createOscillator(), vib = ctx.createOscillator(), vg = ctx.createGain(), g = ctx.createGain();
+    osc.type = 'sawtooth';
+    osc.frequency.setValueAtTime(f0, at); osc.frequency.exponentialRampToValueAtTime(f0 * 1.45, at + dur * .4);
+    osc.frequency.exponentialRampToValueAtTime(f0 * 1.15, at + dur);
+    vib.frequency.value = 5 + R() * 3; vg.gain.value = f0 * .03; vib.connect(vg); vg.connect(osc.frequency);
+    g.gain.setValueAtTime(0, at); g.gain.linearRampToValueAtTime(.05, at + .06); g.gain.linearRampToValueAtTime(0, at + dur);
+    for (const [freq, q] of [[800, 5], [1250, 6]]) {
+      const bp = ctx.createBiquadFilter(); bp.type = 'bandpass'; bp.frequency.value = freq * (.9 + R() * .25); bp.Q.value = q;
+      osc.connect(bp); bp.connect(g);
+    }
+    g.connect(out); osc.start(at); vib.start(at); osc.stop(at + dur + .05); vib.stop(at + dur + .05);
+  }
+  // applause: short bright noise bursts, thinning out
+  for (let i = 0; i < 70; i++) {
+    const at = t0 + .3 + Math.pow(R(), 1.4) * (len - .6), src = ctx.createBufferSource(), hp = ctx.createBiquadFilter(), g = ctx.createGain();
+    src.buffer = noise; hp.type = 'bandpass'; hp.frequency.value = 1500 + R() * 1500; hp.Q.value = .9;
+    const lvl = .35 * (1 - (at - t0) / len);
+    g.gain.setValueAtTime(lvl, at); g.gain.exponentialRampToValueAtTime(.001, at + .05);
+    src.connect(hp); hp.connect(g); g.connect(out); src.start(at, R() * (len - .2), .06);
+  }
+  // two whistles
+  for (const at of [t0 + .5, t0 + 1.5]) {
+    const osc = ctx.createOscillator(), g = ctx.createGain();
+    osc.type = 'sine';
+    osc.frequency.setValueAtTime(1900, at); osc.frequency.exponentialRampToValueAtTime(2700, at + .18);
+    osc.frequency.exponentialRampToValueAtTime(2300, at + .45);
+    g.gain.setValueAtTime(0, at); g.gain.linearRampToValueAtTime(.08, at + .04); g.gain.linearRampToValueAtTime(0, at + .45);
+    osc.connect(g); g.connect(out); osc.start(at); osc.stop(at + .5);
+  }
+}
+
 function launchConfetti() {
   const fx = $('fxG'), R = rng(Date.now() % 100000 + 1), cols = CFG.palette;
   for (let i = 0; i < 60; i++) {
@@ -996,7 +1058,7 @@ function updateConfetti(dt) {
 /* =====================================================================
    INPUT + LOOP + BOOT
    ===================================================================== */
-svg.addEventListener('pointerdown', e => { e.preventDefault(); FSM.call('down', e); });
+svg.addEventListener('pointerdown', e => { e.preventDefault(); unlockAudio(); FSM.call('down', e); });
 window.addEventListener('pointermove', e => FSM.call('move', e));
 window.addEventListener('pointerup', e => FSM.call('up', e));
 window.addEventListener('pointercancel', e => FSM.call('up', e));
